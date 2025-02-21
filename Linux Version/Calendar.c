@@ -532,6 +532,7 @@ void show_menu() {
 
 
 int main() {
+    clear();
     int choice;
     initialize_view();
 
@@ -568,6 +569,7 @@ int main() {
             break;
         case 7:
             printf("Program exited.\n");
+            clear();
             return 0;
         default:
             ;
