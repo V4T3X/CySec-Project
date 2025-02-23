@@ -186,7 +186,7 @@ void login_user(redisContext *c) {
 
     // compare the hashed passwords
     if (memcmp(hashed_password, stored_hashed_password, sizeof(stored_hashed_password)) == 0) {
-        printf("%s\nYou have successfully logged in as %s.%s\n", GREEN_COLOR, username, RESET_COLOR);
+        printf("%s\nYou have successfully logged in as '%s'.%s\n", GREEN_COLOR, username, RESET_COLOR);
     } else {
         printf("%s\nIncorrect password.%s\n", RED_COLOR, RESET_COLOR);
     }
