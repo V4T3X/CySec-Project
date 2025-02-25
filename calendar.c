@@ -647,12 +647,26 @@ int main(int argc, char *argv[])
         {
         case '1':
             clear();
-            add_event();
+            if (logged_in(user))
+            {
+                add_event();
+            }
+            else
+            {
+                printf("%sYou must be logged in to do this!%s\n", RED_COLOR, RESET_COLOR);
+            }
             press_enter_to_continue();
             break;
         case '2':
             clear();
-            remove_event();
+            if (logged_in(user))
+            {
+                remove_event();
+            }
+            else
+            {
+                printf("%sYou must be logged in to do this!%s\n", RED_COLOR, RESET_COLOR);
+            }
             press_enter_to_continue();
             break;
         case '3':
