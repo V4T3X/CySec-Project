@@ -1,0 +1,5 @@
+.vscode/
+auth
+calendar
+server-cert.pem
+server-key.pem

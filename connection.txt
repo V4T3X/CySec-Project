@@ -1,0 +1,2 @@
+server: socat openssl-listen:1234,reuseaddr,fork,cert=server-cert.pem,key=server-key.pem,verify=0 EXEC:"./Calendar",pty 
+client: socat - openssl:127.0.0.1:1234,verify=0
