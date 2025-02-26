@@ -1,7 +1,5 @@
 // Compile the program: gcc -o auth auth.c -lhiredis -largon2 -lssl -lcrypto
 
-// socat TCP-LISTEN:1234,reuseaddr,fork EXEC:./auth
-
 #include <hiredis/hiredis.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,7 +105,7 @@ void register_user(redisContext *c)
             continue;
         }
 
-        reply = redisCommand(c, "HEXISTS users %s", username);
+        reply = redisCommand(c, "EXISTS user:%s", username);
         if (!reply)
         {
             printf("%s\nError: Redis command failed.\n%s", RED_COLOR, RESET_COLOR);
@@ -162,7 +160,8 @@ void register_user(redisContext *c)
     }
 
     // store in db
-    reply = redisCommand(c, "HSET users %s %s", username, base64_combined);
+    time_t now = time(NULL);
+    reply = redisCommand(c, "HSET user:%s password %s created_at %ld", username, base64_combined, now);
     if (!reply || reply->type != REDIS_REPLY_INTEGER)
     {
         printf("%s\nError: Failed to save user to Redis.%s\n", RED_COLOR, RESET_COLOR);
@@ -199,7 +198,7 @@ void login_user(redisContext *c, char *user)
     }
 
     // username check in db
-    redisReply *reply = redisCommand(c, "HEXISTS users %s", username);
+    redisReply *reply = redisCommand(c, "EXISTS user:%s", username);
     if (!reply)
     {
         printf("Error: Redis command failed.\n");
@@ -221,7 +220,7 @@ void login_user(redisContext *c, char *user)
     }
 
     // retrieve stored hash and salt from db
-    reply = redisCommand(c, "HGET users %s", username);
+    reply = redisCommand(c, "HGET user:%s password", username);
     if (!reply || reply->type != REDIS_REPLY_STRING)
     {
         printf("%s\nError: Failed to retrieve user data from Redis.%s\n", RED_COLOR, RESET_COLOR);

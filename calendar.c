@@ -17,7 +17,7 @@
 #define YELLOW_COLOR "\033[0;33m"
 #define GREY "\033[38;5;245m"
 
-#define MAX_EVENTS 10
+#define MAX_EVENTS 20
 #define MAX_NAME_LENGTH 50
 #define MAX_DESC_LENGTH 256
 #define MAX_DATE_LENGTH 12
