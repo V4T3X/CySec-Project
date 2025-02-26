@@ -32,6 +32,7 @@ redisContext *connect_redis()
     if (c == NULL || c->err)
     {
         printf("%sError connecting to Redis: %s\n%s", RED_COLOR, c->errstr, RESET_COLOR);
+        redisFree(c);
         exit(1);
     }
     return c;
@@ -318,7 +319,7 @@ void show_menu(const char *logged_in_user)
     }
     else
     {
-        printf("%sNot logged in.\n%s", BOLD, RESET_COLOR);
+        printf("%sYou are not logged in.\n%s", BOLD, RESET_COLOR);
     }
 
     printf("\n");

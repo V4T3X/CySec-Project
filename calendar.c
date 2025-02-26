@@ -1,4 +1,4 @@
-// Compile the program: gcc -o calendar calendar.c
+// Compile the program: gcc -o calendar calendar.c -lhiredis
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <limits.h>
+#include <hiredis/hiredis.h>
 
 #define RESET_COLOR "\033[0m"
 #define BOLD "\033[1m"
@@ -17,7 +18,7 @@
 #define YELLOW_COLOR "\033[0;33m"
 #define GREY "\033[38;5;245m"
 
-#define MAX_EVENTS 20
+#define MAX_EVENTS 2
 #define MAX_NAME_LENGTH 50
 #define MAX_DESC_LENGTH 256
 #define MAX_DATE_LENGTH 12
@@ -26,15 +27,15 @@
 typedef struct
 {
     int id;
-    char date[MAX_DATE_LENGTH];
-    char name[MAX_NAME_LENGTH];
-    char description[MAX_DESC_LENGTH];
+    char *date;
+    char *name;
+    char *description;
 } Event;
 
 // Global variables
-Event events[MAX_EVENTS];
-int event_count = 0;
-int next_event_id = 1;
+Event *events[MAX_EVENTS];
+int event_count;
+int next_event_id;
 
 int view_mode;
 int view_day;
@@ -83,8 +84,8 @@ int has_event(int day, int month, int year)
     { // Check if there is any event in the given month
         for (int i = 0; i < event_count; i++)
         {
-            int event_month = atoi(events[i].date + 5); // Extract the month from the date
-            int event_year = atoi(events[i].date);      // Extract the year from the date
+            int event_month = atoi(events[i]->date + 5); // Extract the month from the date
+            int event_year = atoi(events[i]->date);      // Extract the year from the date
             if (event_month == month && event_year == year)
             {
                 return 1; // Event found in this month
@@ -99,7 +100,7 @@ int has_event(int day, int month, int year)
     // Search for an event with the same date in the events array
     for (int i = 0; i < event_count; i++)
     {
-        if (strcmp(events[i].date, date) == 0)
+        if (strcmp(events[i]->date, date) == 0)
         {
             return 1; // Event found on this date
         }
@@ -243,7 +244,7 @@ void press_enter_to_continue()
     empty_input_buffer();
 }
 
-int input_validation_addDate(char *date, int length)
+int input_validation_addEvent(char *date, int length)
 {
     if (fgets(date, length, stdin) == NULL)
     {
@@ -271,7 +272,37 @@ int input_validation_addDate(char *date, int length)
 
 // EVENTS --------------------
 // Function to add a new event
-void add_event()
+
+Event *create_event(int id, const char *date, const char *name, const char *description)
+{
+    Event *new_event = (Event *)malloc(sizeof(Event));
+    if (new_event == NULL)
+    {
+        printf("%sError: Memory could not be allocated.\n%s", RED_COLOR, RESET_COLOR);
+        return NULL;
+    }
+
+    new_event->id = id;
+    new_event->date = strdup(date);
+    new_event->name = strdup(name);
+    new_event->description = strdup(description);
+
+    return new_event;
+}
+
+void add_event_to_redis(redisContext *c, const char *user, int id, const char *date, const char *name, const char *description)
+{
+    redisReply *reply = redisCommand(c, "HSET user:%s:event:%d date %s name %s description %s", user, id, date, name, description);
+    if (reply == NULL)
+    {
+        printf("%sError adding the event to Redis.\n%s", RED_COLOR, RESET_COLOR);
+        freeReplyObject(reply);
+        return;
+    }
+    freeReplyObject(reply);
+}
+
+void add_event(redisContext *c, const char *user)
 {
     if (event_count >= MAX_EVENTS)
     {
@@ -292,7 +323,7 @@ void add_event()
     while (1)
     {
         printf("Enter the event date (YYYY-MM-DD): ");
-        if (input_validation_addDate(date, MAX_DATE_LENGTH))
+        if (input_validation_addEvent(date, MAX_DATE_LENGTH))
         {
             if (sscanf(date, "%d-%d-%d", &year, &month, &day) != 3 || month < 1 || month > 12 || day < 1 || day > get_days_in_month(month, year) || year < 1 || year > 9999)
             {
@@ -321,7 +352,7 @@ void add_event()
     while (1)
     {
         printf("Enter the event name (maximum %d characters): ", MAX_NAME_LENGTH);
-        if (input_validation_addDate(name, MAX_NAME_LENGTH))
+        if (input_validation_addEvent(name, MAX_NAME_LENGTH))
         {
             break;
         }
@@ -330,20 +361,83 @@ void add_event()
     while (1)
     {
         printf("Enter the event description (maximum %d characters): ", MAX_DESC_LENGTH);
-        if (input_validation_addDate(description, MAX_DESC_LENGTH))
+        if (input_validation_addEvent(description, MAX_DESC_LENGTH))
         {
             break;
         }
     }
 
-    // Add the event to the array
-    events[event_count].id = next_event_id++;
-    strncpy(events[event_count].date, date, MAX_DATE_LENGTH);
-    strncpy(events[event_count].name, name, MAX_NAME_LENGTH);
-    strncpy(events[event_count].description, description, MAX_DESC_LENGTH);
-    event_count++;
+    // Add the event to the array and redis
+    events[event_count++] = create_event(next_event_id, date, name, description);
+    add_event_to_redis(c, user, next_event_id, date, name, description);
+    next_event_id++;
 
     printf("%s\nEvent added successfully!\n%s", GREEN_COLOR, RESET_COLOR);
+}
+
+void load_events_from_redis(redisContext *c, const char *user)
+{
+    redisReply *keys_reply = redisCommand(c, "KEYS user:%s:event:*", user);
+    if (keys_reply == NULL || keys_reply->type != REDIS_REPLY_ARRAY)
+    {
+        printf("%sError retrieving event keys from Redis.\n%s", RED_COLOR, RESET_COLOR);
+        exit(1);
+    }
+
+    event_count = 0;
+    next_event_id = 1;
+
+    // Über alle gefundenen Event-Keys iterieren
+    for (size_t i = 0; i < keys_reply->elements; i++)
+    {
+        char *event_key = keys_reply->element[i]->str;
+
+        // Event-ID aus Schlüssel extrahieren
+        char *event_id_str = strrchr(event_key, ':');
+        if (!event_id_str || strlen(event_id_str) < 2)
+            continue;
+        int event_id = atoi(event_id_str + 1);
+
+        // Event-Daten abrufen
+        redisReply *event_reply = redisCommand(c, "HGETALL %s", event_key);
+        if (event_reply == NULL || event_reply->type != REDIS_REPLY_ARRAY || event_reply->elements % 2 != 0)
+        {
+            printf("%sError retrieving event data for %s.\n%s", RED_COLOR, event_key, RESET_COLOR);
+            continue;
+        }
+
+        char *date = NULL, *name = NULL, *description = NULL;
+
+        // Event-Daten aus der Hash-Struktur extrahieren
+        for (size_t j = 0; j < event_reply->elements; j += 2)
+        {
+            char *field = event_reply->element[j]->str;
+            char *value = event_reply->element[j + 1]->str;
+
+            if (strcmp(field, "date") == 0)
+                date = value;
+            else if (strcmp(field, "name") == 0)
+                name = value;
+            else if (strcmp(field, "description") == 0)
+                description = value;
+        }
+
+        // Falls alle Felder vorhanden sind, Event speichern
+        if (date && name && description && event_count < MAX_EVENTS)
+        {
+            events[event_count] = create_event(event_id, date, name, description);
+            event_count++;
+
+            if (event_id >= next_event_id)
+            {
+                next_event_id = event_id + 1;
+            }
+        }
+
+        freeReplyObject(event_reply);
+    }
+
+    freeReplyObject(keys_reply);
 }
 
 unsigned int get_valid_unsigned_integer()
@@ -388,7 +482,27 @@ unsigned int get_valid_unsigned_integer()
 }
 
 // Function to remove an event
-void remove_event()
+void free_event(Event *event)
+{
+    free(event->date);
+    free(event->name);
+    free(event->description);
+    free(event);
+}
+
+void delete_event_from_redis(redisContext *c, const char *user, int id)
+{
+    redisReply *reply = redisCommand(c, "DEL user:%s:event:%d", user, id);
+    if (reply == NULL)
+    {
+        printf("%sError deleting the event from Redis.\n%s", RED_COLOR, RESET_COLOR);
+        freeReplyObject(reply);
+        return;
+    }
+    freeReplyObject(reply);
+}
+
+void remove_event(redisContext *c, const char *user)
 {
     if (event_count == 0)
     {
@@ -401,8 +515,10 @@ void remove_event()
     // Find and remove the event
     for (int i = 0; i < event_count; i++)
     {
-        if (events[i].id == id)
+        if (events[i]->id == id)
         {
+            free_event(events[i]);
+            delete_event_from_redis(c, user, id);
             printf("%s\nEvent removed successfully!\n%s", GREEN_COLOR, RESET_COLOR);
 
             // Shift remaining events
@@ -421,8 +537,8 @@ void remove_event()
 // Helper function for sorting events by date
 int compare_events(const void *a, const void *b)
 {
-    const Event *event_a = (const Event *)a;
-    const Event *event_b = (const Event *)b;
+    const Event *event_a = *(const Event **)a;
+    const Event *event_b = *(const Event **)b;
     return strcmp(event_a->date, event_b->date);
 }
 
@@ -446,15 +562,15 @@ void view_events()
     time_t now = mktime(&current_time);
 
     // Arrays to hold past and future events
-    Event past_events[MAX_EVENTS];
-    Event future_events[MAX_EVENTS];
+    Event *past_events[MAX_EVENTS];
+    Event *future_events[MAX_EVENTS];
     int past_count = 0, future_count = 0;
 
     // Categorize events into past and future (including today)
     for (int i = 0; i < event_count; i++)
     {
         int event_year, event_month, event_day;
-        sscanf(events[i].date, "%d-%d-%d", &event_year, &event_month, &event_day);
+        sscanf(events[i]->date, "%d-%d-%d", &event_year, &event_month, &event_day);
 
         struct tm event_time = {.tm_year = event_year - 1900, .tm_mon = event_month - 1, .tm_mday = event_day};
         time_t event_timestamp = mktime(&event_time);
@@ -470,31 +586,31 @@ void view_events()
     }
 
     // Sort events
-    qsort(past_events, past_count, sizeof(Event), compare_events);
-    qsort(future_events, future_count, sizeof(Event), compare_events);
+    qsort(past_events, past_count, sizeof(Event *), compare_events);
+    qsort(future_events, future_count, sizeof(Event *), compare_events);
 
     // Display past events
     printf("======== Past Events ========\n");
     for (int i = 0; i < past_count; i++)
     {
         printf("ID: %d\nDate: %s%s%s\nName: %s\nDescription: %s\n",
-               past_events[i].id, GRAY_COLOR, past_events[i].date, RESET_COLOR, past_events[i].name, past_events[i].description);
+               past_events[i]->id, GRAY_COLOR, past_events[i]->date, RESET_COLOR, past_events[i]->name, past_events[i]->description);
         printf("-----------------------------\n");
     }
 
     // Display future events (including today)
-    printf("======= Future Events =======\n");
+    printf("\n\n======= Future Events =======\n");
     for (int i = 0; i < future_count; i++)
     {
         int event_year, event_month, event_day;
-        sscanf(future_events[i].date, "%d-%d-%d", &event_year, &event_month, &event_day);
+        sscanf(future_events[i]->date, "%d-%d-%d", &event_year, &event_month, &event_day);
 
         const char *color = (event_year == current_year && event_month == current_month && event_day == current_day)
                                 ? MAGENTA_COLOR
                                 : BLUE_COLOR;
 
         printf("ID: %d\nDate: %s%s%s\nName: %s\nDescription: %s\n",
-               future_events[i].id, color, future_events[i].date, RESET_COLOR, future_events[i].name, future_events[i].description);
+               future_events[i]->id, color, future_events[i]->date, RESET_COLOR, future_events[i]->name, future_events[i]->description);
         printf("-----------------------------\n");
     }
 }
@@ -589,18 +705,17 @@ void show_menu(const char *user)
         display_month_view();
     }
 
-    printf("\n\n=========== Menu ===========\n");
-
+    printf("\n============================\n", BOLD, RESET_COLOR);
     if (logged_in(user))
     {
         printf("%s\nLogged in as: %s%s%s\n", BOLD, YELLOW_COLOR, user, RESET_COLOR);
     }
     else
     {
-        printf("%s\nNot logged in.\n%s", BOLD, RESET_COLOR);
+        printf("%s\nYou are not logged in.\n%s", BOLD, RESET_COLOR);
     }
 
-    printf("\n--- Event Management ---\n");
+    printf("\n----- %sEvent Management%s -----\n\n", BOLD, RESET_COLOR);
     if (logged_in(user))
     {
         printf("%s1.%s Add Event\n", RED_COLOR, RESET_COLOR);
@@ -613,7 +728,7 @@ void show_menu(const char *user)
     }
     printf("%s3.%s View Events\n", RED_COLOR, RESET_COLOR);
 
-    printf("\n--- Calendar View ---\n");
+    printf("\n------ %sCalendar View%s -------\n\n", BOLD, RESET_COLOR);
     printf("%s4.%s Reset View\n", RED_COLOR, RESET_COLOR);
     printf("%s5.%s Navigate\n\n", RED_COLOR, RESET_COLOR);
 
@@ -623,9 +738,23 @@ void show_menu(const char *user)
     printf("Choose an option: ");
 }
 
+// connect with redis
+redisContext *connect_redis()
+{
+    redisContext *c = redisConnect("127.0.0.1", 6379);
+    if (c == NULL || c->err)
+    {
+        printf("%sError connecting to Redis: %s\n%s", RED_COLOR, c->errstr, RESET_COLOR);
+        redisFree(c);
+        exit(1);
+    }
+    return c;
+}
+
 int main(int argc, char *argv[])
 {
     clear();
+    redisContext *c = connect_redis();
 
     if (argc < 2)
     {
@@ -633,6 +762,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     char *user = argv[1];
+    load_events_from_redis(c, user);
 
     char choice;
     initialize_view();
@@ -649,7 +779,7 @@ int main(int argc, char *argv[])
             clear();
             if (logged_in(user))
             {
-                add_event();
+                add_event(c, user);
             }
             else
             {
@@ -661,7 +791,7 @@ int main(int argc, char *argv[])
             clear();
             if (logged_in(user))
             {
-                remove_event();
+                remove_event(c, user);
             }
             else
             {
@@ -687,5 +817,6 @@ int main(int argc, char *argv[])
         }
         clear();
     }
+    redisFree(c);
     return 0;
 }
