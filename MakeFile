@@ -1,0 +1,24 @@
+CC = gcc
+CFLAGS = -Wall -I./misc
+
+TARGETS = calendar auth
+
+COMMON_SRC = misc/common.c
+CALENDAR_SRC = src/calendar.c $(COMMON_SRC)
+AUTH_SRC = src/auth.c $(COMMON_SRC)
+
+AUTH_LIBS = -lhiredis -largon2 -lssl -lcrypto
+CALENDAR_LIBS = -lhiredis
+
+all: $(TARGETS)
+
+calendar: $(CALENDAR_SRC)
+	$(CC) $(CFLAGS) $(CALENDAR_SRC) -o $@ $(CALENDAR_LIBS)
+
+auth: $(AUTH_SRC)
+	$(CC) $(CFLAGS) $(AUTH_SRC) -o $@ $(AUTH_LIBS)
+
+clean:
+	rm -f $(TARGETS)
+
+.PHONY: all clean

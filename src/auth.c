@@ -1,5 +1,3 @@
-// Compile the program: gcc -o auth auth.c -lhiredis -largon2 -lssl -lcrypto
-
 #include <hiredis/hiredis.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,40 +9,15 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ctype.h>
+#include "common.h"
 
-#define RESET_COLOR "\033[0m"
-#define ORANGE_COLOR "\033[38;5;214m"
-#define BOLD "\033[1m"
-#define RED_COLOR "\033[31m"
-#define GREEN_COLOR "\033[32m"
-#define GRAY_COLOR "\033[90m"
-#define YELLOW_COLOR "\033[0;33m"
-
+// login parameter
 #define HASHED_PWD_LENGTH 32
 #define PWD_LENGTH 48
 #define USERNAME_LENGTH 32
 #define SALT_LENGTH 16
 
-// connect with redis
-redisContext *connect_redis()
-{
-    redisContext *c = redisConnect("127.0.0.1", 6379);
-    if (c == NULL || c->err)
-    {
-        printf("%sError connecting to Redis: %s\n%s", RED_COLOR, c->errstr, RESET_COLOR);
-        redisFree(c);
-        exit(1);
-    }
-    return c;
-}
-
-void empty_input_buffer()
-{
-    int ch;
-    while ((ch = getchar()) != '\n' && ch != EOF)
-        ;
-}
-
+// function to validate input for password and username
 int input_validation(char *input, const char *str, int length)
 {
     if (fgets(input, length, stdin) == NULL)
@@ -71,6 +44,7 @@ int input_validation(char *input, const char *str, int length)
     return 1;
 }
 
+// strict validation for username
 int is_valid_username(const char *username)
 {
     const char *allowed_special_chars = "_-@.+";
@@ -181,6 +155,7 @@ void register_user(redisContext *c)
     return;
 }
 
+// function for user login
 void login_user(redisContext *c, char *user)
 {
     char username[USERNAME_LENGTH] = {0};
@@ -188,7 +163,6 @@ void login_user(redisContext *c, char *user)
     unsigned char stored_salt[SALT_LENGTH];
     unsigned char stored_hashed_password[HASHED_PWD_LENGTH];
     unsigned char stored_combined[HASHED_PWD_LENGTH + SALT_LENGTH];
-    char base64_combined[EVP_ENCODE_LENGTH(sizeof(stored_combined))];
     unsigned char hashed_password[HASHED_PWD_LENGTH];
 
     // username validation
@@ -271,13 +245,7 @@ void login_user(redisContext *c, char *user)
     return;
 }
 
-void press_enter_to_continue()
-{
-    printf("\nPress Enter to continue...");
-    empty_input_buffer();
-}
-
-// show public accounts
+// open calendar for logged-in user
 void open_calendar(redisContext *c, const char *username)
 {
     if (!is_valid_username(username))
@@ -331,14 +299,10 @@ void show_menu(const char *logged_in_user)
     printf("%s5.%s Exit\n", RED_COLOR, RESET_COLOR);
     printf("\n");
     printf("=====================================\n");
-    printf("\nEnter your choice: ");
+    printf("Enter your choice: ");
 }
 
-void clear()
-{
-    system("clear");
-}
-
+// MAIN ------------
 int main()
 {
     clear();
