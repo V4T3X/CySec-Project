@@ -167,7 +167,7 @@ void login_user(redisContext *c, char *user)
 
     // username validation
     printf("Enter username: ");
-    if (!input_validation(username, "Username", sizeof(username)))
+    if (!input_validation(username, "Username", sizeof(username)) || !is_valid_username(username))
     {
         return;
     }
