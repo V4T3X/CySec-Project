@@ -305,6 +305,7 @@ void display_registered_user(redisContext *c, char *logged_in_user)
     if (keys_reply->elements == 0)
     {
         printf("No registered users found.\n");
+        press_enter_to_continue();
         freeReplyObject(keys_reply);
         return;
     }
