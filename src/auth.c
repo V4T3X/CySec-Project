@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <ctype.h>
 #include "common.h"
+#include <time.h>
 
 // login parameter
 #define HASHED_PWD_LENGTH 32
@@ -246,7 +247,7 @@ void login_user(redisContext *c, char *user)
 }
 
 // open calendar for logged-in user
-void open_calendar(redisContext *c, const char *username)
+void open_calendar(redisContext *c, const char *username, const char *privilege_level)
 {
     if (!is_valid_username(username))
     {
@@ -258,7 +259,7 @@ void open_calendar(redisContext *c, const char *username)
 
     if (pid == 0)
     {
-        execl("./calendar", "./calendar", username, (char *)NULL);
+        execl("./calendar", "./calendar", username, privilege_level, (char *)NULL);
         printf("%sFailed to start calendar.\n%s", RED_COLOR, RESET_COLOR);
         exit(1);
     }
@@ -274,10 +275,144 @@ void open_calendar(redisContext *c, const char *username)
     }
 }
 
+// structure to store user data and created_at timestamp
+typedef struct
+{
+    char *username;
+    unsigned int created_at;
+} User;
+
+// comparison function for sorting users by created_at
+int compare_users(const void *a, const void *b)
+{
+    // compare the created_at timestamps
+    return ((User *)a)->created_at - ((User *)b)->created_at;
+}
+
+void display_registered_user(redisContext *c, char *logged_in_user)
+{
+    // retrieve all user keys from the Redis database
+    redisReply *keys_reply = redisCommand(c, "KEYS user:*");
+
+    if (keys_reply == NULL || keys_reply->type != REDIS_REPLY_ARRAY)
+    {
+        printf("%sError: Unable to retrieve user data.%s\n", RED_COLOR, RESET_COLOR);
+        freeReplyObject(keys_reply);
+        return;
+    }
+
+    // if no user keys are found
+    if (keys_reply->elements == 0)
+    {
+        printf("No registered users found.\n");
+        freeReplyObject(keys_reply);
+        return;
+    }
+
+    // prepare memory to store user data
+    User *users = malloc(keys_reply->elements * sizeof(User));
+    size_t user_count = 0;
+
+    // iterate through all the user keys
+    for (size_t i = 0; i < keys_reply->elements; i++)
+    {
+        char *user_key = keys_reply->element[i]->str;
+
+        // extract the username from the user key
+        char *username_str = strrchr(user_key, ':');
+        if (!username_str || strlen(username_str) < 2)
+            continue;
+        char *username = username_str + 1;
+
+        // retrieve the creation timestamp for the user
+        redisReply *user_reply = redisCommand(c, "HGET %s created_at", user_key);
+
+        // check if user data was retrieved successfully
+        if (user_reply == NULL || user_reply->type != REDIS_REPLY_STRING)
+        {
+            printf("%sError: Unable to retrieve data for user %s.%s\n", RED_COLOR, user_key, RESET_COLOR);
+            freeReplyObject(user_reply);
+            continue;
+        }
+
+        // convert Unix timestamp to an unsigned int
+        unsigned int created_at = atoi(user_reply->str);
+
+        // store the user data
+        users[user_count].username = strdup(username);
+        users[user_count].created_at = created_at;
+        user_count++;
+
+        freeReplyObject(user_reply);
+    }
+
+    // sort users by the created_at timestamp
+    qsort(users, user_count, sizeof(User), compare_users);
+
+    // print the table header
+    printf("%s%s  %s(Sorted by Registration Timestamp)\n", BOLD, "Registered Users", RESET_COLOR);
+    printf("%s----------------------------------------------------------------%s\n\n", BLUE_COLOR, RESET_COLOR);
+
+    // display sorted user data
+    for (size_t i = 0; i < user_count; i++)
+    {
+        // convert the timestamp to a human-readable format
+        time_t raw_time = (time_t)users[i].created_at;
+        struct tm *time_info = localtime(&raw_time);
+
+        char formatted_time[20];
+        strftime(formatted_time, sizeof(formatted_time), "%Y-%m-%d %H:%M", time_info);
+
+        // display username and creation time
+        printf("%s%s%s  (%s)\n\n", YELLOW_COLOR, users[i].username, RESET_COLOR, formatted_time);
+
+        free(users[i].username); // free memory for username
+    }
+
+    // free memory for the users array
+    free(users);
+    freeReplyObject(keys_reply);
+
+    printf("%s----------------------------------------------------------------%s\n\n", BLUE_COLOR, RESET_COLOR);
+    printf("Select a user to view their public events (visible to everyone).\n\n%sYour choice: %s", BOLD, RESET_COLOR);
+
+    char username[USERNAME_LENGTH] = {0};
+    if (!input_validation(username, "Username", sizeof(username)) || !is_valid_username(username))
+    {
+        press_enter_to_continue();
+        return;
+    }
+
+    // username check in db
+    redisReply *reply = redisCommand(c, "EXISTS user:%s", username);
+    if (!reply)
+    {
+        printf("Error: Redis command failed.\n");
+        return;
+    }
+    if (reply->integer == 0)
+    {
+        printf("%s\nUser '%s' does not exist.%s\n", RED_COLOR, username, RESET_COLOR);
+        press_enter_to_continue();
+        freeReplyObject(reply);
+        return;
+    }
+    freeReplyObject(reply);
+
+    if (strcmp(username, logged_in_user) == 0)
+    {
+        open_calendar(c, username, "1");
+    }
+    else
+    {
+        open_calendar(c, username, "0");
+    }
+}
+
 void show_menu(const char *logged_in_user)
 {
     printf("=====================================\n");
-    printf("%s        Command Line Calendar        \n%s", GREEN_COLOR, RESET_COLOR);
+    printf("%s        %sCommand Line Calendar        \n%s", BOLD, GREEN_COLOR, RESET_COLOR);
     printf("=====================================\n");
     printf("\n");
 
@@ -293,10 +428,11 @@ void show_menu(const char *logged_in_user)
     printf("\n");
     printf("%s1.%s Register\n", RED_COLOR, RESET_COLOR);
     printf("%s2.%s Login\n", RED_COLOR, RESET_COLOR);
-    printf("%s3.%s Open Calendar\n", RED_COLOR, RESET_COLOR);
+    printf("%s3.%s View and Edit Your Calendar\n", RED_COLOR, RESET_COLOR);
+    printf("%s4.%s Browse Users and Their Calendars\n", RED_COLOR, RESET_COLOR);
 
-    printf("\n%s4.%s Logout\n", RED_COLOR, RESET_COLOR);
-    printf("%s5.%s Exit\n", RED_COLOR, RESET_COLOR);
+    printf("\n%s5.%s Logout\n", RED_COLOR, RESET_COLOR);
+    printf("%s6.%s Exit\n", RED_COLOR, RESET_COLOR);
     printf("\n");
     printf("=====================================\n");
     printf("Enter your choice: ");
@@ -334,10 +470,15 @@ int main()
 
         case '3':
             clear();
-            open_calendar(c, user);
+            open_calendar(c, user, "1");
             break;
 
         case '4':
+            clear();
+            display_registered_user(c, user);
+            break;
+
+        case '5':
             clear();
             memset(user, 0, USERNAME_LENGTH);
             break;
@@ -345,7 +486,7 @@ int main()
         default:;
         }
         clear();
-    } while (choice != '5');
+    } while (choice != '6');
 
     redisFree(c);
     return 0;

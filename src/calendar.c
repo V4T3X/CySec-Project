@@ -267,7 +267,7 @@ Event *create_event(int id, int visibility, const char *date, const char *name, 
 // stores added event in the redis db
 void add_event_to_redis(redisContext *c, const char *user, int id, int visibility, const char *date, const char *name, const char *description)
 {
-    redisReply *reply = redisCommand(c, "HSET user:%s:event:%d visibility %d date %s name %s description %s", user, id, visibility, date, name, description);
+    redisReply *reply = redisCommand(c, "HSET event:%s:%d visibility %d date %s name %s description %s", user, id, visibility, date, name, description);
     if (reply == NULL)
     {
         printf("%sError adding the event to Redis.\n%s", RED_COLOR, RESET_COLOR);
@@ -304,12 +304,12 @@ void add_event(redisContext *c, const char *user)
         empty_input_buffer();
         if (ch == 'y' || ch == 'Y')
         {
-            visibility = 1;
+            visibility = 0;
             break;
         }
         else if (ch == 'n' || ch == 'N')
         {
-            visibility = 0;
+            visibility = 1;
             break;
         }
         else
@@ -375,12 +375,13 @@ void add_event(redisContext *c, const char *user)
 }
 
 // loads the pre-existing events from redis when the calendar is opened
-void load_events_from_redis(redisContext *c, const char *user)
+void load_events_from_redis(redisContext *c, const char *user, int privilege_level)
 {
-    redisReply *keys_reply = redisCommand(c, "KEYS user:%s:event:*", user);
+    redisReply *keys_reply = redisCommand(c, "KEYS event:%s:*", user);
     if (keys_reply == NULL || keys_reply->type != REDIS_REPLY_ARRAY)
     {
         printf("%sError retrieving event keys from Redis.\n%s", RED_COLOR, RESET_COLOR);
+        freeReplyObject(keys_reply);
         exit(1);
     }
 
@@ -426,7 +427,7 @@ void load_events_from_redis(redisContext *c, const char *user)
         }
 
         // if all fields are present, save the event
-        if (visibility != -1 && date && name && description && event_count < MAX_EVENTS)
+        if (visibility != -1 && date && name && description && event_count < MAX_EVENTS && visibility <= privilege_level)
         {
             events[event_count] = create_event(event_id, visibility, date, name, description);
             event_count++;
@@ -506,7 +507,7 @@ void free_events()
 // removes event from the redis db
 void delete_event_from_redis(redisContext *c, const char *user, unsigned int id)
 {
-    redisReply *reply = redisCommand(c, "DEL user:%s:event:%d", user, id);
+    redisReply *reply = redisCommand(c, "DEL event:%s:%d", user, id);
     if (reply == NULL)
     {
         printf("%sError deleting the event from Redis.\n%s", RED_COLOR, RESET_COLOR);
@@ -562,11 +563,11 @@ char *print_visibility(int vis)
 {
     if (vis)
     {
-        return "public";
+        return "private";
     }
     else
     {
-        return "private";
+        return "public";
     }
 }
 
@@ -716,13 +717,13 @@ void navigate()
     }
 }
 
-int logged_in(const char *user)
+int logged_in(const char *user, int privilege_level)
 {
-    return user != NULL && user[0] != '\0';
+    return privilege_level && user != NULL && user[0] != '\0';
 }
 
 // function to display the menu
-void show_menu(const char *user)
+void show_menu(const char *user, int privilege_level)
 {
     if (!view_mode)
     {
@@ -734,17 +735,21 @@ void show_menu(const char *user)
     }
 
     printf("\n============================\n");
-    if (logged_in(user))
+    if (logged_in(user, privilege_level))
     {
         printf("%s\nLogged in as: %s%s%s\n", BOLD, YELLOW_COLOR, user, RESET_COLOR);
     }
-    else
+    else if (user == NULL || user[0] == '\0')
     {
         printf("%s\nYou are not logged in.\n%s", BOLD, RESET_COLOR);
     }
+    else
+    {
+        printf("%s\nViewing calendar of: %s%s%s\n", BOLD, GREEN_COLOR, user, RESET_COLOR);
+    }
 
     printf("\n----- %sEvent Management%s -----\n\n", BOLD, RESET_COLOR);
-    if (logged_in(user))
+    if (logged_in(user, privilege_level))
     {
         printf("%s1.%s Add Event\n", RED_COLOR, RESET_COLOR);
         printf("%s2.%s Remove Event\n", RED_COLOR, RESET_COLOR);
@@ -772,15 +777,17 @@ int main(int argc, char *argv[])
     clear();
     redisContext *c = connect_redis();
 
-    if (argc < 2)
+    if (argc < 3)
     {
-        printf("No user provided.\n");
+        printf("No user or privilege level provided.\n");
         return 1;
     }
     char *user = argv[1];
-    if (logged_in(user))
+    int privilege_level = atoi(argv[2]);
+
+    if (user != NULL && user[0] != '\0')
     {
-        load_events_from_redis(c, user);
+        load_events_from_redis(c, user, privilege_level);
     }
 
     char choice;
@@ -788,7 +795,7 @@ int main(int argc, char *argv[])
 
     do
     {
-        show_menu(user);
+        show_menu(user, privilege_level);
         choice = getchar();
         empty_input_buffer();
 
@@ -796,7 +803,7 @@ int main(int argc, char *argv[])
         {
         case '1':
             clear();
-            if (logged_in(user))
+            if (logged_in(user, privilege_level))
             {
                 add_event(c, user);
             }
@@ -808,7 +815,7 @@ int main(int argc, char *argv[])
             break;
         case '2':
             clear();
-            if (logged_in(user))
+            if (logged_in(user, privilege_level))
             {
                 remove_event(c, user);
             }
