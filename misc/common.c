@@ -25,7 +25,7 @@ void empty_input_buffer()
 
 void clear()
 {
-    system("clear");
+    printf("\033[H\033[J");
 }
 
 void press_enter_to_continue()
